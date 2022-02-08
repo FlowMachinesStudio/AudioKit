@@ -214,10 +214,10 @@ create_macos_framework()
 # Make a UIKitforMac version (maccatalyst) from the iOS project, but package with the Mac version
 create_catalyst_framework()
 {
-	if test $OSTYPE = darwin19; then
+	if test $OSTYPE = darwin20; then
 		echo "Building Mac Catalyst framework"
 	else
-		echo "Skipping Catalyst build, macOS Catalina is required"
+		echo "Skipping Catalyst build, macOS Big Sur is required"
 		return
 	fi
 	PROJECT="../AudioKit/iOS/AudioKit For iOS.xcodeproj"
