@@ -417,11 +417,12 @@ typedef struct
  @param blue  A pointer to a CGFloat to hold the value of the blue component. This value will be between 0 and 1.
  @param alpha A pointer to a CGFloat to hold the value of the alpha component. This value will be between 0 and 1.
  */
-+ (void)getColorComponentsFromCGColor:(CGColorRef)color
-                                  red:(CGFloat *)red
-                                green:(CGFloat *)green
-                                 blue:(CGFloat *)blue
-                                alpha:(CGFloat *)alpha;
+
+//+ (void)getColorComponentsFromCGColor:(CGColorRef)color
+//                                  red:(CGFloat *)red
+//                                green:(CGFloat *)green
+//                                 blue:(CGFloat *)blue
+//                                alpha:(CGFloat *)alpha;
 
 //------------------------------------------------------------------------------
 #pragma mark - Plot Utility
