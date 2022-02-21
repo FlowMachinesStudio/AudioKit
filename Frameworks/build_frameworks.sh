@@ -217,8 +217,8 @@ create_catalyst_framework()
 	if test $OSTYPE = darwin20; then
 		echo "Building Mac Catalyst framework"
 	else
-		echo "Skipping Catalyst build, macOS Big Sur is required"
-		return
+		echo "Error Catalyst build, macOS Big Sur is required"
+		exit 1
 	fi
 	PROJECT="../AudioKit/iOS/AudioKit For iOS.xcodeproj"
 	DIR="AudioKit-macOS/Catalyst"
