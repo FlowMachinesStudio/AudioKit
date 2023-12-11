@@ -38,7 +38,7 @@ extension MIDIPacketList: Sequence {
         let raw = UnsafeRawPointer(ptr)
         let dataPtr = raw.advanced(by: MemoryLayout.offset(of: \MIDIPacket.data)!)
 
-        let length = Int(raw.loadUnaligned(fromByteOffset: MemoryLayout.offset(of: \MIDIPacket.length)!,
+        let length = Int(raw.load(fromByteOffset: MemoryLayout.offset(of: \MIDIPacket.length)!,
                                            as: UInt16.self))
 
         var array = [UInt8](repeating: 0, count: length)
@@ -52,7 +52,7 @@ extension MIDIPacketList: Sequence {
         var packet = MIDIPacket()
         let raw = UnsafeRawPointer(ptr)
 
-        let length = raw.loadUnaligned(fromByteOffset: MemoryLayout.offset(of: \MIDIPacket.length)!,
+        let length = raw.load(fromByteOffset: MemoryLayout.offset(of: \MIDIPacket.length)!,
                                        as: UInt16.self)
 
         // We can't represent a longer packet as a MIDIPacket value.
@@ -61,7 +61,7 @@ extension MIDIPacketList: Sequence {
         }
 
         packet.length = length
-        packet.timeStamp = raw.loadUnaligned(fromByteOffset: MemoryLayout.offset(of: \MIDIPacket.timeStamp)!,
+        packet.timeStamp = raw.load(fromByteOffset: MemoryLayout.offset(of: \MIDIPacket.timeStamp)!,
                                              as: MIDITimeStamp.self)
 
         let dataPtr = raw.advanced(by: MemoryLayout.offset(of: \MIDIPacket.data)!)
