@@ -43,9 +43,15 @@ open class AKMIDIInstrument: AKPolyphonicNode, AKMIDIListener {
     open func enableMIDI(_ midiClient: MIDIClientRef = AKManager.midi.client,
                          name: String = "AudioKit MIDI Instrument") {
         CheckError(MIDIDestinationCreateWithBlock(midiClient, name as CFString, &midiIn) { packetList, _ in
-            for e in packetList.pointee {
-                e.forEach { (event) in
-                    self.handle(event: event)
+            withUnsafePointer(to: packetList.pointee.packet) { packetPtr in
+                var p = packetPtr
+                for _ in 1...packetList.pointee.numPackets {
+                    for event in p.pointee {
+                        DispatchQueue.main.async {
+                            self.handle(event: event)
+                        }
+                    }
+                    p = UnsafePointer<MIDIPacket>(MIDIPacketNext(p))
                 }
             }
         })
