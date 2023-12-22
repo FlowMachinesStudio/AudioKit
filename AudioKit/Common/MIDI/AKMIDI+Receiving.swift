@@ -141,18 +141,17 @@ extension AKMIDI {
                 if var port = inputPorts[inputUID] {
 
                     let result = MIDIInputPortCreateWithBlock(client, inputPortName, &port) { packetList, _ in
-                        var packetCount = 1
-                        for packet in packetList.pointee {
-                            // a CoreMIDI packet may contain multiple MIDI events -
-                            // treat it like an array of events that can be transformed
-                            let events = [AKMIDIEvent](packet) //uses MIDIPacketeList makeIterator
-                            let transformedMIDIEventList = self.transformMIDIEventList(events)
-                            // Note: incomplete SysEx packets will not have a status
-                            for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
-                                || transformedEvent.command != nil {
-                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
+                        withUnsafePointer(to: packetList.pointee.packet) { packetPtr in
+                            var p = packetPtr
+                            for _ in 1...packetList.pointee.numPackets {
+                                let events:[AKMIDIEvent] = p.pointee.map{$0}
+                                let transformedMIDIEventList = self.transformMIDIEventList(events)
+                                for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
+                                    || transformedEvent.command != nil {
+                                        self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
+                                }
+                                p = UnsafePointer<MIDIPacket>(MIDIPacketNext(p))
                             }
-                            packetCount += 1
                         }
                     }
 
