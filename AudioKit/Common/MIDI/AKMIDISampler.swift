@@ -42,15 +42,19 @@ open class AKMIDISampler: AKAppleSampler {
     open func enableMIDI(_ midiClient: MIDIClientRef = AKManager.midi.client,
                          name: String = "MIDI Sampler") {
         CheckError(MIDIDestinationCreateWithBlock(midiClient, name as CFString, &midiIn) { packetList, _ in
-            for e in packetList.pointee {
-                e.forEach { (event) in
-                    if event.length == 3 {
-                        do {
-                            try self.handle(event: event)
-                        } catch let exception {
-                            AKLog("Exception handling MIDI event: \(exception)", log: OSLog.midi, type: .error)
+            withUnsafePointer(to: packetList.pointee.packet) { packetPtr in
+                var p = packetPtr
+                for _ in 1...packetList.pointee.numPackets {
+                    for event in p.pointee {
+                        if event.length == 3 {
+                            do {
+                                try self.handle(event: event)
+                            } catch let exception {
+                                AKLog("Exception handling MIDI event: \(exception)", log: OSLog.midi, type: .error)
+                            }
                         }
                     }
+                    p = UnsafePointer<MIDIPacket>(MIDIPacketNext(p))
                 }
             }
         })
