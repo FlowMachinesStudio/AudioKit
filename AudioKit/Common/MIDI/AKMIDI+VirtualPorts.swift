@@ -39,10 +39,13 @@ extension AKMIDI {
             client,
             virtualPortname as CFString,
             &virtualInput) { packetList, _ in
-                for packet in packetList.pointee {
-                    // a Core MIDI packet may contain multiple MIDI events
-                    for event in packet {
-                        self.handleMIDIMessage(event, fromInput: uniqueID)
+                withUnsafePointer(to: packetList.pointee.packet) { packetPtr in
+                    var p = packetPtr
+                    for _ in 1...packetList.pointee.numPackets {
+                        for event in p.pointee {
+                            self.handleMIDIMessage(event, fromInput: uniqueID)
+                        }
+                        p = UnsafePointer<MIDIPacket>(MIDIPacketNext(p))
                     }
                 }
         }
