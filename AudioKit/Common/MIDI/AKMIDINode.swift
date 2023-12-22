@@ -47,15 +47,19 @@ open class AKMIDINode: AKNode, AKMIDIListener {
     open func enableMIDI(_ midiClient: MIDIClientRef = AKManager.midi.client,
                          name: String = "Unnamed") {
         CheckError(MIDIDestinationCreateWithBlock(midiClient, name as CFString, &midiIn) { packetList, _ in
-            for e in packetList.pointee {
-                let event = AKMIDIEvent(packet: e)
-                guard event.data.count > 2 else {
-                    return
+            withUnsafePointer(to: packetList.pointee.packet) { packetPtr in
+                var p = packetPtr
+                for _ in 1...packetList.pointee.numPackets {
+                    for event in p.pointee {
+                        guard event.data.count > 2 else {
+                            return
+                        }
+                        self.handleMIDI(data1: event.data[0],
+                                        data2: event.data[1],
+                                        data3: event.data[2])
+                    }
+                    p = UnsafePointer<MIDIPacket>(MIDIPacketNext(p))
                 }
-                self.handleMIDI(data1: event.data[0],
-                                data2: event.data[1],
-                                data3: event.data[2])
-
             }
         })
     }
