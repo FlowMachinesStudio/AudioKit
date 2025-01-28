@@ -80,6 +80,16 @@ extension AKMIDI {
         return MIDISources().names
     }
 
+    /// Array of input source endpoint references
+    public var inputRefs: [MIDIEndpointRef] {
+        var refs = MIDISources().endpointRefs
+        // Remove inputs which are actually virtual outputs from AudioKit
+        for input in self.virtualOutputs {
+            refs.removeAll(where: { $0 == input })
+        }
+        return refs
+    }
+
     /// Lookup a input name from its unique id
     ///
     /// - Parameter forUid: unique id for a input
