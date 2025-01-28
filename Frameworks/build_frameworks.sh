@@ -214,7 +214,7 @@ create_macos_framework()
 # Make a UIKitforMac version (maccatalyst) from the iOS project, but package with the Mac version
 create_catalyst_framework()
 {
-	if test $OSTYPE = darwin20; then
+	if test $OSTYPE = darwin23; then
 		echo "Building Mac Catalyst framework"
 	else
 		echo "Error Catalyst build, macOS Big Sur is required"
