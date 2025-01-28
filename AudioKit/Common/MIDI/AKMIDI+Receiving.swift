@@ -134,29 +134,55 @@ extension AKMIDI {
     /// - parameter inputUID: Unique identifier for a MIDI Input
     ///
     public func openInput(uid inputUID: MIDIUniqueID) {
-        for (uid, src) in zip(inputUIDs, MIDISources()) {
+
+        let sources = inputRefs
+        
+        for (uid, src) in zip(inputUIDs, sources) {
             if inputUID == 0 || inputUID == uid {
                 inputPorts[inputUID] = MIDIPortRef()
 
                 if var port = inputPorts[inputUID] {
+                    var inputPortCreationResult = noErr
+                    
+                    // Using MIDIInputPortCreateWithProtocol on iOS 14+
+                    if #available(iOS 14.0, macOS 11.0, *) {
+                        // Hardcoded MIDI protocol version 1.0 here, consider to have an option somewhere
+                        inputPortCreationResult = MIDIInputPortCreateWithProtocol(client, inputPortName, ._1_0, &port) { eventPacketList, _ in
 
-                    let result = MIDIInputPortCreateWithBlock(client, inputPortName, &port) { packetList, _ in
-                        withUnsafePointer(to: packetList.pointee.packet) { packetPtr in
-                            var p = packetPtr
-                            for _ in 1...packetList.pointee.numPackets {
-                                let events:[AKMIDIEvent] = p.pointee.map{$0}
-                                let transformedMIDIEventList = self.transformMIDIEventList(events)
+                            guard (eventPacketList.pointee.protocol == ._1_0) else {
+                                Log("Got unsupported MIDI 2.0 MIDIEventList, skipping", log: OSLog.midi)
+                                return
+                            }
+
+                            for midiEventPacket in eventPacketList.unsafeSequence() {
+
+                                let midiEvents = self.processUMPMessages(midiEventPacket)
+                                let transformedMIDIEventList = self.transformMIDIEventList(midiEvents)
                                 for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
                                     || transformedEvent.command != nil {
-                                        self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
+                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
                                 }
-                                p = UnsafePointer<MIDIPacket>(MIDIPacketNext(p))
+                            }
+                        }
+                    } else {
+                        // Using MIDIInputPortCreateWithBlock on iOS 9 - 13
+                        inputPortCreationResult = MIDIInputPortCreateWithBlock(client, inputPortName, &port) { packetList, _ in
+                            
+                            for packet in packetList.pointee {
+                                // a CoreMIDI packet may contain multiple MIDI events -
+                                // treat it like an array of events that can be transformed
+                                let events = [MIDIEvent](packet) //uses MIDIPacketeList makeIterator
+                                let transformedMIDIEventList = self.transformMIDIEventList(events)
+                                // Note: incomplete SysEx packets will not have a status
+                                for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
+                                    || transformedEvent.command != nil {
+                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
+                                }
                             }
                         }
                     }
-
-                    if result != noErr {
-                        AKLog("Error creating MIDI Input Port: \(result)")
+                    if inputPortCreationResult != noErr {
+                        Log("Error creating MIDI Input Port: \(inputPortCreationResult)")
                     }
 
                     MIDIPortConnectSource(port, src, nil)
@@ -164,7 +190,7 @@ extension AKMIDI {
                     endpoints[inputUID] = src
                 }
             }
-        }
+        } 
     }
 
     /// Open a MIDI Input port by name
