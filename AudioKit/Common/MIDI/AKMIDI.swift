@@ -35,6 +35,9 @@ open class AKMIDI {
     /// Virtual MIDI output
     open var virtualOutput = MIDIPortRef()
 
+    /// Array of Virtual MIDI output
+    public var virtualOutputs = [MIDIPortRef()]
+
     /// MIDI Out Port Name
     var outputPortName: CFString = "MIDI Out Port" as CFString
 
@@ -98,4 +101,8 @@ open class AKMIDI {
         isReceivingSysEx = false
     }
     var incomingSysEx = [MIDIByte]()
+
+    internal var incomingUMPSysExMessage = [UInt8]()
+
 }
+

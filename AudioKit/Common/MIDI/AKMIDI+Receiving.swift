@@ -30,6 +30,13 @@ internal struct MIDISources: Collection {
     subscript (index: Index) -> Element {
         return MIDIGetSource(index)
     }
+    
+    enum UMPSysEx7bitStatus: UInt8 {
+        case CompleteMessage = 0x0
+        case Start = 0x1
+        case Continue = 0x2
+        case End = 0x3
+    }
 }
 
 // MARK: - AKMIDIListeners
@@ -106,6 +113,32 @@ extension AKMIDI {
         return name
     }
 
+    enum UMPMessageType: UInt8 {
+        case Utility32bit = 0x0
+        case SystemRealTimeAndCommon32bit = 0x1
+        case MIDI1ChannelVoice32bit = 0x2
+        case DataAndSysEx64bit = 0x3
+        case MIDI2ChannelVoice64bit = 0x4
+        case Data128bit = 0x5
+        case Reserved32bit_1 = 0x6
+        case Reserved32bit_2 = 0x7
+        case Reserved64bit_3 = 0x8
+        case Reserved64bit_4 = 0x9
+        case Reserved64bit_5 = 0xA
+        case Reserved96bit_6 = 0xB
+        case Reserved96bit_7 = 0xC
+        case Reserved128bit_8 = 0xD
+        case Reserved128bit_9 = 0xE
+        case Reserved128bit_10 = 0xF
+    }
+
+    enum UMPSysEx7bitStatus: UInt8 {
+        case CompleteMessage = 0x0
+        case Start = 0x1
+        case Continue = 0x2
+        case End = 0x3
+    }
+
     /// Look up the unique id for a input index
     ///
     /// - Parameter inputIndex: index of destination
@@ -127,6 +160,72 @@ extension AKMIDI {
         let uid = inputUIDs[index]
         openInput(uid: uid)
     }
+
+    /// Parsing UMP Messages
+    @available(iOS 14.0, macOS 11.0, *)
+    private func processUMPMessages(_ midiEventPacket: MIDIEventList.UnsafeSequence.Element) -> [AKMIDIEvent] {
+        // Collection of UInt32 words
+        let words = MIDIEventPacket.WordCollection(midiEventPacket)
+        let timeStamp = midiEventPacket.pointee.timeStamp
+        var midiEvents = [AKMIDIEvent]()
+        var wordIndex = 0
+        
+        // Iterating through valid words in collection.
+        // Using wordCount, because MIDIEventPacket will contain garbage data after wordCount.
+        while (wordIndex < midiEventPacket.pointee.wordCount) {
+            let word = words[wordIndex]
+            
+            // Parsing UMP words
+            var (umpMessageType, umpMessageBytes) = self.getUMPMessageTypeWithByteArray(from: word)
+            
+            guard (umpMessageType != nil) else {
+                AKLog("Got invalid UMP Message Type, skipping rest of the packet", log: OSLog.midi)
+                return midiEvents
+            }
+
+            switch umpMessageType {
+            case .Utility32bit, .SystemRealTimeAndCommon32bit, .MIDI1ChannelVoice32bit:
+
+                midiEvents.append(AKMIDIEvent(data: umpMessageBytes, timeStamp: timeStamp))
+                wordIndex += 1
+                break
+            case .Reserved32bit_1, .Reserved32bit_2:
+                AKLog("Got unsupported 32 bit UMP message of type: \(String(describing: umpMessageType))", log: OSLog.midi)
+                wordIndex += 1
+                break
+            case .DataAndSysEx64bit:
+                // Appending bytes from second word to byte array
+                let secondWordBytes = byteArray(from: words[wordIndex + 1])
+                umpMessageBytes.append(contentsOf: secondWordBytes)
+                let completeSysExMessageData = processUMPSysExMessage(with: umpMessageBytes)
+                midiEvents.append(AKMIDIEvent(data: completeSysExMessageData, timeStamp: timeStamp))
+
+                wordIndex += 2
+                break
+            case .MIDI2ChannelVoice64bit, .Reserved64bit_3, .Reserved64bit_4, .Reserved64bit_5:
+                AKLog("Got unsupported 64 bit UMP message of type: \(String(describing: umpMessageType))", log: OSLog.midi)
+                wordIndex += 2
+                break
+            case .Reserved96bit_6, .Reserved96bit_7:
+                AKLog("Got unsupported 96 bit UMP message of type: \(String(describing: umpMessageType))", log: OSLog.midi)
+                wordIndex += 3
+                break
+            case .Data128bit, .Reserved128bit_8, .Reserved128bit_9, .Reserved128bit_10:
+                AKLog("Got unsupported 128 bit UMP message of type \(String(describing: umpMessageType))", log: OSLog.midi)
+                wordIndex += 4
+                break
+            default:
+                // We should not get there, because of the guard at the top
+                AKLog("Received undefined UMP Message type", log: OSLog.midi)
+                wordIndex = Int(midiEventPacket.pointee.wordCount) // data probably corrupted, skipping rest of the packet, exiting while loop
+                break
+            }
+        }
+        
+        return midiEvents
+    }
+
+
 
     /// Open a MIDI Input port by index
     ///
@@ -160,7 +259,7 @@ extension AKMIDI {
                         inputPortCreationResult = MIDIInputPortCreateWithProtocol(client, inputPortName, ._1_0, &port) { eventPacketList, _ in
 
                             guard (eventPacketList.pointee.protocol == ._1_0) else {
-                                Log("Got unsupported MIDI 2.0 MIDIEventList, skipping", log: OSLog.midi)
+                                //Log("Got unsupported MIDI 2.0 MIDIEventList, skipping", log: OSLog.midi)
                                 return
                             }
 
@@ -181,7 +280,7 @@ extension AKMIDI {
                             for packet in packetList.pointee {
                                 // a CoreMIDI packet may contain multiple MIDI events -
                                 // treat it like an array of events that can be transformed
-                                let events = [MIDIEvent](packet) //uses MIDIPacketeList makeIterator
+                                let events = [AKMIDIEvent](packet) //uses MIDIPacketeList makeIterator
                                 let transformedMIDIEventList = self.transformMIDIEventList(events)
                                 // Note: incomplete SysEx packets will not have a status
                                 for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
@@ -192,7 +291,7 @@ extension AKMIDI {
                         }
                     }
                     if inputPortCreationResult != noErr {
-                        Log("Error creating MIDI Input Port: \(inputPortCreationResult)")
+                        AKLog("Error creating MIDI Input Port: \(inputPortCreationResult)")
                     }
 
                     MIDIPortConnectSource(port, src, nil)
@@ -202,6 +301,76 @@ extension AKMIDI {
             }
         } 
     }
+
+    private func byteArray<T>(from value: T) -> [UInt8] where T: FixedWidthInteger {
+        withUnsafeBytes(of: value.bigEndian, Array.init)
+    }
+   
+    private func getMSB(from uint8: UInt8) -> UInt8 {
+        return (uint8 & 0xF0) >> 4
+    }
+
+    private func getLSB(from uint8: UInt8) -> UInt8 {
+        return uint8 & 0x0F
+    }
+
+    private func processUMPSysExMessage(with bytes: [UInt8]) -> [UInt8] {
+        // Chapter 4.4 of Universal MIDI Packet (UMP) Format and MIDI 2.0 Protocol, Version 1.0
+        // http://download.xskernel.org/docs/protocols/M2-104-UM_v1-0_UMP_and_MIDI_2-0_Protocol_Specification.pdf
+
+        let umpSysExStatus = UMPSysEx7bitStatus(rawValue: getMSB(from: bytes[0])) // status byte
+        let validBytesCount = getLSB(from: bytes[0]) // valid bytes count field
+        let validBytes = Array(bytes[1..<1+Int(validBytesCount)])
+
+        guard (umpSysExStatus != nil) else {
+            AKLog("UMP SYSEX - Got unsupported UMPSysEx7bitStatus", log: OSLog.midi)
+            return validBytes
+        }
+
+        // New UMP format for SysEx messages does not contain F0 and F7 as start / stop flags
+        // We need to use new UMP message type field and add these flags to make existing MIDI parser code happy and people expect to have F0 and F7 in the SysEx message I think
+
+        switch umpSysExStatus {
+        case .CompleteMessage:
+            AKLog("UMP SYSEX - Got complete SysEx message in one UMP packet", log: OSLog.midi)
+
+            incomingUMPSysExMessage = [UInt8]()
+            incomingUMPSysExMessage.append(0xF0)
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            incomingUMPSysExMessage.append(0xF7)
+            return incomingUMPSysExMessage
+        case .Start:
+            AKLog("UMP SYSEX - Start receiving UMP SysEx messages", log: OSLog.midi)
+
+            incomingUMPSysExMessage = [UInt8]()
+            incomingUMPSysExMessage.append(0xF0)
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            // Full message not ready, nothing to return
+            return []
+        case .Continue:
+            AKLog("UMP SYSEX - Continue receiving UMP SysEx messages", log: OSLog.midi)
+
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            // Full message not ready, nothing to return
+            return []
+        case .End:
+            AKLog("UMP SYSEX - End of UMP SysEx messages", log: OSLog.midi)
+
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            incomingUMPSysExMessage.append(0xF7)
+            return incomingUMPSysExMessage
+        default:
+            AKLog("UMP SYSEX - Got unsupported UMPSysEx7bitStatus", log: OSLog.midi)
+            return []
+        }
+    }
+
+    private func getUMPMessageTypeWithByteArray(from ump: UInt32) -> (UMPMessageType?, [UInt8]) {
+        let bytes = byteArray(from: ump) // 4 bytes from UInt32
+        // returning bytes without first type/group byte, I guess we don't need it in MIDI 1.0
+        return (UMPMessageType(rawValue: getMSB(from: bytes[0])), Array(bytes[1...bytes.count - 1]))
+    }
+
 
     /// Open a MIDI Input port by name
     ///

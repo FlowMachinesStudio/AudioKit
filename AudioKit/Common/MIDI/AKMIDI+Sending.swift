@@ -71,6 +71,12 @@ extension Collection where Iterator.Element == MIDIEndpointRef {
             getMIDIObjectIntegerProperty(ref: $0, property: kMIDIPropertyUniqueID)
         }
     }
+
+    var endpointRefs: [MIDIEndpointRef] {
+        return map {
+            $0
+        }
+    }
 }
 
 internal func getMIDIObjectStringProperty(ref: MIDIObjectRef, property: CFString) -> String {
