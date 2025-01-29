@@ -30,13 +30,6 @@ internal struct MIDISources: Collection {
     subscript (index: Index) -> Element {
         return MIDIGetSource(index)
     }
-    
-    enum UMPSysEx7bitStatus: UInt8 {
-        case CompleteMessage = 0x0
-        case Start = 0x1
-        case Continue = 0x2
-        case End = 0x3
-    }
 }
 
 // MARK: - AKMIDIListeners
@@ -113,32 +106,6 @@ extension AKMIDI {
         return name
     }
 
-    enum UMPMessageType: UInt8 {
-        case Utility32bit = 0x0
-        case SystemRealTimeAndCommon32bit = 0x1
-        case MIDI1ChannelVoice32bit = 0x2
-        case DataAndSysEx64bit = 0x3
-        case MIDI2ChannelVoice64bit = 0x4
-        case Data128bit = 0x5
-        case Reserved32bit_1 = 0x6
-        case Reserved32bit_2 = 0x7
-        case Reserved64bit_3 = 0x8
-        case Reserved64bit_4 = 0x9
-        case Reserved64bit_5 = 0xA
-        case Reserved96bit_6 = 0xB
-        case Reserved96bit_7 = 0xC
-        case Reserved128bit_8 = 0xD
-        case Reserved128bit_9 = 0xE
-        case Reserved128bit_10 = 0xF
-    }
-
-    enum UMPSysEx7bitStatus: UInt8 {
-        case CompleteMessage = 0x0
-        case Start = 0x1
-        case Continue = 0x2
-        case End = 0x3
-    }
-
     /// Look up the unique id for a input index
     ///
     /// - Parameter inputIndex: index of destination
@@ -159,6 +126,162 @@ extension AKMIDI {
         }
         let uid = inputUIDs[index]
         openInput(uid: uid)
+    }
+
+
+
+
+
+    /// Open a MIDI Input port by index
+    ///
+    /// - Parameter inputIndex: Index of source port
+    public func openInput(index inputIndex: Int) {
+        guard inputIndex < inputNames.count else {
+            return
+        }
+        let uid = uidForInputAtIndex(inputIndex)
+        openInput(uid: uid)
+    }
+
+    enum UMPMessageType: UInt8 {
+        case Utility32bit = 0x0
+        case SystemRealTimeAndCommon32bit = 0x1
+        case MIDI1ChannelVoice32bit = 0x2
+        case DataAndSysEx64bit = 0x3
+        case MIDI2ChannelVoice64bit = 0x4
+        case Data128bit = 0x5
+        case Reserved32bit_1 = 0x6
+        case Reserved32bit_2 = 0x7
+        case Reserved64bit_3 = 0x8
+        case Reserved64bit_4 = 0x9
+        case Reserved64bit_5 = 0xA
+        case Reserved96bit_6 = 0xB
+        case Reserved96bit_7 = 0xC
+        case Reserved128bit_8 = 0xD
+        case Reserved128bit_9 = 0xE
+        case Reserved128bit_10 = 0xF
+    }
+    
+    enum UMPSysEx7bitStatus: UInt8 {
+        case CompleteMessage = 0x0
+        case Start = 0x1
+        case Continue = 0x2
+        case End = 0x3
+    }
+
+    /// Open a MIDI Input port
+    ///
+    /// - parameter inputUID: Unique identifier for a MIDI Input
+    ///
+    public func openInput(uid inputUID: MIDIUniqueID) {
+
+        let sources = inputRefs
+        
+        for (uid, src) in zip(inputUIDs, sources) {
+            if inputUID == 0 || inputUID == uid {
+                inputPorts[inputUID] = MIDIPortRef()
+
+                if var port = inputPorts[inputUID] {
+                    var inputPortCreationResult = noErr
+                    
+                    // Using MIDIInputPortCreateWithProtocol on iOS 14+
+                    if #available(iOS 14.0, macOS 11.0, *) {
+                        // Hardcoded MIDI protocol version 1.0 here, consider to have an option somewhere
+                        inputPortCreationResult = MIDIInputPortCreateWithProtocol(client, inputPortName, ._1_0, &port) { eventPacketList, _ in
+
+                            guard (eventPacketList.pointee.protocol == ._1_0) else {
+                                AKLog("Got unsupported MIDI 2.0 MIDIEventList, skipping", log: OSLog.midi)
+                                return
+                            }
+
+                            for midiEventPacket in eventPacketList.unsafeSequence() {
+
+                                let midiEvents = self.processUMPMessages(midiEventPacket)
+                                let transformedMIDIEventList = self.transformMIDIEventList(midiEvents)
+                                for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
+                                    || transformedEvent.command != nil {
+                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
+                                }
+                            }
+                        }
+                    } else {
+                        // Using MIDIInputPortCreateWithBlock on iOS 9 - 13
+                        inputPortCreationResult = MIDIInputPortCreateWithBlock(client, inputPortName, &port) { packetList, _ in
+                            
+                            for packet in packetList.pointee {
+                                // a CoreMIDI packet may contain multiple MIDI events -
+                                // treat it like an array of events that can be transformed
+                                let events = [AKMIDIEvent](packet) //uses MIDIPacketeList makeIterator
+                                let transformedMIDIEventList = self.transformMIDIEventList(events)
+                                // Note: incomplete SysEx packets will not have a status
+                                for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
+                                    || transformedEvent.command != nil {
+                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
+                                }
+                            }
+                        }
+                    }
+                    if inputPortCreationResult != noErr {
+                        AKLog("Error creating MIDI Input Port: \(inputPortCreationResult)")
+                    }
+
+                    MIDIPortConnectSource(port, src, nil)
+                    inputPorts[inputUID] = port
+                    endpoints[inputUID] = src
+                }
+            }
+        } 
+    }
+
+    private func processUMPSysExMessage(with bytes: [UInt8]) -> [UInt8] {
+        // Chapter 4.4 of Universal MIDI Packet (UMP) Format and MIDI 2.0 Protocol, Version 1.0
+        // http://download.xskernel.org/docs/protocols/M2-104-UM_v1-0_UMP_and_MIDI_2-0_Protocol_Specification.pdf
+
+        let umpSysExStatus = UMPSysEx7bitStatus(rawValue: getMSB(from: bytes[0])) // status byte
+        let validBytesCount = getLSB(from: bytes[0]) // valid bytes count field
+        let validBytes = Array(bytes[1..<1+Int(validBytesCount)])
+
+        guard (umpSysExStatus != nil) else {
+            AKLog("UMP SYSEX - Got unsupported UMPSysEx7bitStatus", log: OSLog.midi)
+            return validBytes
+        }
+
+        // New UMP format for SysEx messages does not contain F0 and F7 as start / stop flags
+        // We need to use new UMP message type field and add these flags to make existing MIDI parser code happy and people expect to have F0 and F7 in the SysEx message I think
+
+        switch umpSysExStatus {
+        case .CompleteMessage:
+            AKLog("UMP SYSEX - Got complete SysEx message in one UMP packet", log: OSLog.midi)
+
+            incomingUMPSysExMessage = [UInt8]()
+            incomingUMPSysExMessage.append(0xF0)
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            incomingUMPSysExMessage.append(0xF7)
+            return incomingUMPSysExMessage
+        case .Start:
+            AKLog("UMP SYSEX - Start receiving UMP SysEx messages", log: OSLog.midi)
+
+            incomingUMPSysExMessage = [UInt8]()
+            incomingUMPSysExMessage.append(0xF0)
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            // Full message not ready, nothing to return
+            return []
+        case .Continue:
+            AKLog("UMP SYSEX - Continue receiving UMP SysEx messages", log: OSLog.midi)
+
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            // Full message not ready, nothing to return
+            return []
+        case .End:
+            AKLog("UMP SYSEX - End of UMP SysEx messages", log: OSLog.midi)
+
+            incomingUMPSysExMessage.append(contentsOf: validBytes)
+            incomingUMPSysExMessage.append(0xF7)
+            return incomingUMPSysExMessage
+        default:
+            AKLog("UMP SYSEX - Got unsupported UMPSysEx7bitStatus", log: OSLog.midi)
+            return []
+        }
     }
 
     /// Parsing UMP Messages
@@ -225,83 +348,6 @@ extension AKMIDI {
         return midiEvents
     }
 
-
-
-    /// Open a MIDI Input port by index
-    ///
-    /// - Parameter inputIndex: Index of source port
-    public func openInput(index inputIndex: Int) {
-        guard inputIndex < inputNames.count else {
-            return
-        }
-        let uid = uidForInputAtIndex(inputIndex)
-        openInput(uid: uid)
-    }
-
-    /// Open a MIDI Input port
-    ///
-    /// - parameter inputUID: Unique identifier for a MIDI Input
-    ///
-    public func openInput(uid inputUID: MIDIUniqueID) {
-
-        let sources = inputRefs
-        
-        for (uid, src) in zip(inputUIDs, sources) {
-            if inputUID == 0 || inputUID == uid {
-                inputPorts[inputUID] = MIDIPortRef()
-
-                if var port = inputPorts[inputUID] {
-                    var inputPortCreationResult = noErr
-                    
-                    // Using MIDIInputPortCreateWithProtocol on iOS 14+
-                    if #available(iOS 14.0, macOS 11.0, *) {
-                        // Hardcoded MIDI protocol version 1.0 here, consider to have an option somewhere
-                        inputPortCreationResult = MIDIInputPortCreateWithProtocol(client, inputPortName, ._1_0, &port) { eventPacketList, _ in
-
-                            guard (eventPacketList.pointee.protocol == ._1_0) else {
-                                //Log("Got unsupported MIDI 2.0 MIDIEventList, skipping", log: OSLog.midi)
-                                return
-                            }
-
-                            for midiEventPacket in eventPacketList.unsafeSequence() {
-
-                                let midiEvents = self.processUMPMessages(midiEventPacket)
-                                let transformedMIDIEventList = self.transformMIDIEventList(midiEvents)
-                                for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
-                                    || transformedEvent.command != nil {
-                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
-                                }
-                            }
-                        }
-                    } else {
-                        // Using MIDIInputPortCreateWithBlock on iOS 9 - 13
-                        inputPortCreationResult = MIDIInputPortCreateWithBlock(client, inputPortName, &port) { packetList, _ in
-                            
-                            for packet in packetList.pointee {
-                                // a CoreMIDI packet may contain multiple MIDI events -
-                                // treat it like an array of events that can be transformed
-                                let events = [AKMIDIEvent](packet) //uses MIDIPacketeList makeIterator
-                                let transformedMIDIEventList = self.transformMIDIEventList(events)
-                                // Note: incomplete SysEx packets will not have a status
-                                for transformedEvent in transformedMIDIEventList where transformedEvent.status != nil
-                                    || transformedEvent.command != nil {
-                                    self.handleMIDIMessage(transformedEvent, fromInput: inputUID)
-                                }
-                            }
-                        }
-                    }
-                    if inputPortCreationResult != noErr {
-                        AKLog("Error creating MIDI Input Port: \(inputPortCreationResult)")
-                    }
-
-                    MIDIPortConnectSource(port, src, nil)
-                    inputPorts[inputUID] = port
-                    endpoints[inputUID] = src
-                }
-            }
-        } 
-    }
-
     private func byteArray<T>(from value: T) -> [UInt8] where T: FixedWidthInteger {
         withUnsafeBytes(of: value.bigEndian, Array.init)
     }
@@ -313,58 +359,7 @@ extension AKMIDI {
     private func getLSB(from uint8: UInt8) -> UInt8 {
         return uint8 & 0x0F
     }
-
-    private func processUMPSysExMessage(with bytes: [UInt8]) -> [UInt8] {
-        // Chapter 4.4 of Universal MIDI Packet (UMP) Format and MIDI 2.0 Protocol, Version 1.0
-        // http://download.xskernel.org/docs/protocols/M2-104-UM_v1-0_UMP_and_MIDI_2-0_Protocol_Specification.pdf
-
-        let umpSysExStatus = UMPSysEx7bitStatus(rawValue: getMSB(from: bytes[0])) // status byte
-        let validBytesCount = getLSB(from: bytes[0]) // valid bytes count field
-        let validBytes = Array(bytes[1..<1+Int(validBytesCount)])
-
-        guard (umpSysExStatus != nil) else {
-            AKLog("UMP SYSEX - Got unsupported UMPSysEx7bitStatus", log: OSLog.midi)
-            return validBytes
-        }
-
-        // New UMP format for SysEx messages does not contain F0 and F7 as start / stop flags
-        // We need to use new UMP message type field and add these flags to make existing MIDI parser code happy and people expect to have F0 and F7 in the SysEx message I think
-
-        switch umpSysExStatus {
-        case .CompleteMessage:
-            AKLog("UMP SYSEX - Got complete SysEx message in one UMP packet", log: OSLog.midi)
-
-            incomingUMPSysExMessage = [UInt8]()
-            incomingUMPSysExMessage.append(0xF0)
-            incomingUMPSysExMessage.append(contentsOf: validBytes)
-            incomingUMPSysExMessage.append(0xF7)
-            return incomingUMPSysExMessage
-        case .Start:
-            AKLog("UMP SYSEX - Start receiving UMP SysEx messages", log: OSLog.midi)
-
-            incomingUMPSysExMessage = [UInt8]()
-            incomingUMPSysExMessage.append(0xF0)
-            incomingUMPSysExMessage.append(contentsOf: validBytes)
-            // Full message not ready, nothing to return
-            return []
-        case .Continue:
-            AKLog("UMP SYSEX - Continue receiving UMP SysEx messages", log: OSLog.midi)
-
-            incomingUMPSysExMessage.append(contentsOf: validBytes)
-            // Full message not ready, nothing to return
-            return []
-        case .End:
-            AKLog("UMP SYSEX - End of UMP SysEx messages", log: OSLog.midi)
-
-            incomingUMPSysExMessage.append(contentsOf: validBytes)
-            incomingUMPSysExMessage.append(0xF7)
-            return incomingUMPSysExMessage
-        default:
-            AKLog("UMP SYSEX - Got unsupported UMPSysEx7bitStatus", log: OSLog.midi)
-            return []
-        }
-    }
-
+    
     private func getUMPMessageTypeWithByteArray(from ump: UInt32) -> (UMPMessageType?, [UInt8]) {
         let bytes = byteArray(from: ump) // 4 bytes from UInt32
         // returning bytes without first type/group byte, I guess we don't need it in MIDI 1.0

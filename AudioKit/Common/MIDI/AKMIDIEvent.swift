@@ -16,15 +16,13 @@ public struct AKMIDIEvent: AKMIDIMessage {
     /// Internal data
     public var data = [MIDIByte]()
 
-    public var timeStamp: MIDITimeStamp?
-
     /// Position data - used for events parsed from a MIDI file
     public var positionInBeats: Double?
 
     //Offset - offset within a packet. Used mostly in receiving packets live
     public var offset: MIDITimeStamp = 0
 
-    //public var timeStamp: MIDITimeStamp?
+    public var timeStamp: MIDITimeStamp?
 
     /// Description
     public var description: String {
